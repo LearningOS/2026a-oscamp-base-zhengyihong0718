@@ -53,7 +53,7 @@ pub fn run_command(program: &str, args: &[&str]) -> String {
     // TODO: Set stdout to Stdio::piped()
     // TODO: Execute with .output() and get output
     // TODO: Convert stdout to String and return
-    todo!()
+    run_command_with_result(program, args).unwrap()
 }
 
 /// Write data to child process (cat) stdin via pipe and read its stdout output.
@@ -89,7 +89,7 @@ pub fn pipe_through_cat(input: &str) -> String {
     // TODO: Write input to child process stdin
     // TODO: Drop stdin to close pipe (otherwise cat won't exit)
     // TODO: Read output from child process stdout
-    todo!()
+    pipe_through_command("cat", &[], input)
 }
 
 /// Get child process exit code.
@@ -110,7 +110,12 @@ pub fn get_exit_code(command: &str) -> i32 {
     // TODO: Use Command::new("sh").args(["-c", command])
     // TODO: Execute and get status
     // TODO: Return exit code
-    todo!()
+    Command::new("sh")
+        .args(["-c", command])
+        .status()
+        .unwrap()
+        .code()
+        .unwrap_or(-1)
 }
 
 /// Execute the given shell command and return its stdout output as a `Result`.
@@ -137,7 +142,12 @@ pub fn run_command_with_result(program: &str, args: &[&str]) -> io::Result<Strin
     // TODO: Set stdout to Stdio::piped()
     // TODO: Execute with .output() and handle Result
     // TODO: Convert stdout to String with from_utf8, mapping errors to io::Error
-    todo!()
+    let output = Command::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .output()?;
+    String::from_utf8(output.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Interact with `grep` via bidirectional pipes, filtering lines that contain a pattern.
@@ -167,7 +177,33 @@ pub fn pipe_through_grep(pattern: &str, input: &str) -> String {
     // TODO: Drop stdin to close pipe
     // TODO: Read output from child stdout line by line
     // TODO: Collect and return matching lines
-    todo!()
+    pipe_through_command("grep", &["--", pattern], input)
+}
+
+fn pipe_through_command(program: &str, args: &[&str], input: &str) -> String {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    // Drain stdout while writing so inputs larger than a pipe buffer cannot deadlock.
+    let (write_result, read_result, output) = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            let result = stdin.write_all(input.as_bytes());
+            drop(stdin);
+            result
+        });
+        let mut output = String::new();
+        let read_result = stdout.read_to_string(&mut output);
+        (writer.join().unwrap(), read_result, output)
+    });
+    child.wait().unwrap();
+    write_result.unwrap();
+    read_result.unwrap();
+    output
 }
 
 #[cfg(test)]
